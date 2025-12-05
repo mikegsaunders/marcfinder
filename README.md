@@ -18,8 +18,8 @@ This installs the `marc` command globally while keeping dependencies isolated.
 If you don't have pipx:
 
 ```bash
-pip install pipx
-pipx ensurepath
+python -m pip install --user pipx
+python -m pipx ensurepath
 ```
 
 Then restart your terminal and run the installation command above.
