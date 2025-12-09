@@ -4994,10 +4994,45 @@
     "Value": "Key Title (R)",
     "Created": "2025-12-03T17:39:30.113287+00:00",
     "Details": {
-      "definition": "",
-      "indicators": {},
-      "subfields": {},
-      "examples": []
+      "definition": "Unique title for a continuing resource that is assigned in conjunction with an ISSN recorded in field 022 by national centers under the auspices of the ISSN Network.",
+      "indicators": {
+        "First - Undefined": [
+          "# - Undefined"
+        ],
+        "Second - Nonfiling characters": [
+          "0 - No nonfiling characters",
+          "1-9 - Number of nonfiling characters"
+        ]
+      },
+      "subfields": {
+        "a": {
+          "description": "Key title",
+          "extended": "",
+          "repeatability": "NR"
+        },
+        "b": {
+          "description": "Qualifying information",
+          "extended": "Parenthetical information that qualifies the title to make it unique.",
+          "repeatability": "NR"
+        },
+        "6": {
+          "description": "Linkage",
+          "extended": "See description of this subfield in Appendix A: Control Subfields.",
+          "repeatability": "NR"
+        },
+        "8": {
+          "description": "Field link and sequence number",
+          "extended": "See description of this subfield in Appendix A: Control Subfields.",
+          "repeatability": "R"
+        }
+      },
+      "examples": [
+        "#0$aViva$b(New York)",
+        "#0$aCauses of death",
+        "#4$aDer Öffentliche Dienst$b(Köln)",
+        "#0$aJournal of polymer science. Part B. Polymer letters",
+        "#0$aEconomic education bulletin$b(Great Barrington)"
+      ]
     }
   },
   "2226": {

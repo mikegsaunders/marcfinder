@@ -53,6 +53,32 @@ def is_code_query(query: str) -> bool:
     return query and query[0].isdigit()
 
 
+def is_range_query(query: str) -> bool:
+    """Determine if query is a range query like 1xx, 5xx."""
+    return len(query) == 3 and query[0].isdigit() and query[1:].lower() == 'xx'
+
+
+def search_by_range(data: Dict[str, dict], range_prefix: str) -> List[Tuple[str, dict]]:
+    """
+    Search for all fields in a range (e.g., 1xx returns all 100-199 fields).
+    Returns list of (key, entry) tuples for fields only (no subfields).
+    """
+    start = int(range_prefix[0]) * 100
+    end = start + 100
+    matches = []
+
+    for key, entry in data.items():
+        # Only include 3-digit field codes, not subfields
+        if len(key) == 3 and key.isdigit():
+            field_num = int(key)
+            if start <= field_num < end:
+                matches.append((key, entry))
+
+    # Sort numerically
+    matches.sort(key=lambda x: int(x[0]))
+    return matches
+
+
 def search_by_code(data: Dict[str, dict], code: str) -> List[Tuple[str, dict]]:
     """
     Search for fields/subfields by code prefix.
@@ -84,6 +110,27 @@ def search_by_code(data: Dict[str, dict], code: str) -> List[Tuple[str, dict]]:
 
     matches.sort(key=sort_key)
 
+    return matches
+
+
+def search_by_range(data: Dict[str, dict], range_prefix: str) -> List[Tuple[str, dict]]:
+    """
+    Search for all fields in a range (e.g., 1xx returns all 100-199 fields).
+    Returns list of (key, entry) tuples for fields only (no subfields).
+    """
+    start = int(range_prefix[0]) * 100
+    end = start + 100
+    matches = []
+
+    for key, entry in data.items():
+        # Only include 3-digit field codes, not subfields
+        if len(key) == 3 and key.isdigit():
+            field_num = int(key)
+            if start <= field_num < end:
+                matches.append((key, entry))
+
+    # Sort numerically
+    matches.sort(key=lambda x: int(x[0]))
     return matches
 
 
@@ -236,11 +283,11 @@ def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Look up MARC 21 bibliographic field definitions",
-        epilog="Examples:\n  marc 020      Look up ISBN field\n  marc 245a     Look up title subfield\n  marc isbn     Search for ISBN-related fields\n  marc -v 245   Show detailed information for field 245",
+        epilog="Examples:\n  marc 020      Look up ISBN field\n  marc 245a     Look up title subfield\n  marc 5xx      List all 5XX note fields\n  marc isbn     Search for ISBN-related fields\n  marc -v 245   Show detailed information for field 245",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "query", help="Field code (e.g., 020, 245a) or keyword to search for"
+        "query", help="Field code (e.g., 020, 245a), range (e.g., 5xx), or keyword to search for"
     )
     parser.add_argument(
         "-v",
@@ -261,12 +308,22 @@ def main():
     query = args.query
 
     if is_code_query(query):
-        # Code lookup
-        matches = search_by_code(data, query)
-        if matches:
-            display_results(matches, verbose=args.verbose)
+        if is_range_query(query):
+            # Range lookup (e.g., 1xx, 5xx)
+            matches = search_by_range(data, query)
+            if matches:
+                range_name = f"{query[0]}XX"
+                print(f"{Fore.GREEN}Fields in {range_name} range ({len(matches)} total):\n")
+                display_results(matches, verbose=False)  # Never verbose for ranges
+            else:
+                print(f"{Fore.YELLOW}No fields found in range: {Fore.WHITE}{query}")
         else:
-            print(f"{Fore.YELLOW}No field found matching code: {Fore.WHITE}{query}")
+            # Code lookup
+            matches = search_by_code(data, query)
+            if matches:
+                display_results(matches, verbose=args.verbose)
+            else:
+                print(f"{Fore.YELLOW}No field found matching code: {Fore.WHITE}{query}")
     else:
         # Keyword search - always use simple format (verbose produces too much output)
         if args.verbose:

@@ -34,6 +34,14 @@ marc 245a       # Shows specific subfield
 marc 100        # Shows personal name field and subfields
 ```
 
+**Browse fields by range:**
+
+```bash
+marc 1xx        # Lists all 1XX fields (Main Entry fields: 100, 110, 111, 130)
+marc 5xx        # Lists all 5XX fields (Note fields: 500-588)
+marc 6xx        # Lists all 6XX fields (Subject Access fields)
+```
+
 **Search by keyword:**
 
 ```bash
