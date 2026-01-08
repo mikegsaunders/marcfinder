@@ -32,10 +32,76 @@ FIELD_RANGE_PAGES = [
     "bd5xx.html",  # Note Fields (500-588)
     "bd6xx.html",  # Subject Access Fields (600-688)
     "bd70x75x.html",  # Added Entry Fields (700-758)
-    "bd76x78x.html",  # Linking Entry Fields (760-788)
+    # "bd76x78x.html",  # Linking Entry Fields - SKIPPED: has grouped format, handled separately
     "bd80x83x.html",  # Series Added Entry Fields (800-830)
     "bd84188x.html",  # Holdings, Location, etc. (841-887)
 ]
+
+# Manually defined linking entry fields (760-788)
+# These have a different page structure and need special handling
+LINKING_ENTRY_FIELDS = [
+    ("760", "Main Series Entry", "R"),
+    ("762", "Subseries Entry", "R"),
+    ("765", "Original Language Entry", "R"),
+    ("767", "Translation Entry", "R"),
+    ("770", "Supplement/Special Issue Entry", "R"),
+    ("772", "Supplement Parent Entry", "R"),
+    ("773", "Host Item Entry", "R"),
+    ("774", "Constituent Unit Entry", "R"),
+    ("775", "Other Edition Entry", "R"),
+    ("776", "Additional Physical Form Entry", "R"),
+    ("777", "Issued With Entry", "R"),
+    ("780", "Preceding Entry", "R"),
+    ("785", "Succeeding Entry", "R"),
+    ("786", "Data Source Entry", "R"),
+    ("787", "Other Relationship Entry", "R"),
+    ("788", "Parallel Description in Another Language of Cataloging", "R"),
+]
+
+# Manually defined field 222 (has different HTML structure requiring manual override)
+FIELD_222_MANUAL = {
+    "Key": "222",
+    "Value": "Key Title (R)",
+    "Details": {
+        "definition": "Unique title for a continuing resource that is assigned in conjunction with an ISSN recorded in field 022 by national centers under the auspices of the ISSN Network.",
+        "indicators": {
+            "First - Undefined": ["# - Undefined"],
+            "Second - Nonfiling characters": [
+                "0 - No nonfiling characters",
+                "1-9 - Number of nonfiling characters",
+            ],
+        },
+        "subfields": {
+            "a": {
+                "description": "Key title",
+                "extended": "",
+                "repeatability": "NR",
+            },
+            "b": {
+                "description": "Qualifying information",
+                "extended": "Parenthetical information that qualifies the title to make it unique.",
+                "repeatability": "NR",
+            },
+            "6": {
+                "description": "Linkage",
+                "extended": "See description of this subfield in Appendix A: Control Subfields.",
+                "repeatability": "NR",
+            },
+            "8": {
+                "description": "Field link and sequence number",
+                "extended": "See description of this subfield in Appendix A: Control Subfields.",
+                "repeatability": "R",
+            },
+        },
+        "examples": [
+            "#0$aViva$b(New York)",
+            "#0$aCauses of death",
+            "#4$aDer Öffentliche Dienst$b(Köln)",
+            "#0$aJournal of polymer science. Part B. Polymer letters",
+            "#0$aEconomic education bulletin$b(Great Barrington)",
+        ],
+    },
+}
 
 
 def fetch_page(url: str) -> BeautifulSoup:
@@ -251,6 +317,10 @@ def scrape_all_fields() -> Dict[str, dict]:
                 continue
             seen_fields.add(field_num)
 
+            # Skip field 222 - has manual override due to different HTML structure
+            if field_num == "222":
+                continue
+
             # Extract detailed information from the concise page
             detailed_info = extract_detailed_field_info(field_num)
 
@@ -298,6 +368,82 @@ def scrape_all_fields() -> Dict[str, dict]:
                         "Created": timestamp,
                     }
                     print(f"    Added: {subfield_key} - {subfield_value}")
+
+    # Add manually defined field 222 (different HTML structure)
+    print("\nAdding manually defined field 222...")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    field_222 = FIELD_222_MANUAL.copy()
+    field_222["Created"] = timestamp
+    all_data["222"] = field_222
+    print(f"  Added: 222 - Key Title (R)")
+
+    # Add subfields for field 222
+    for subfield_code, subfield_info in FIELD_222_MANUAL["Details"][
+        "subfields"
+    ].items():
+        subfield_key = f"222{subfield_code}"
+        subfield_value = (
+            f"{subfield_info['description']} ({subfield_info['repeatability']})"
+        )
+        all_data[subfield_key] = {
+            "Key": subfield_key,
+            "Value": subfield_value,
+            "Created": timestamp,
+        }
+        print(f"    Added: {subfield_key} - {subfield_value}")
+
+    # Process manually defined linking entry fields (760-788)
+    print("\nProcessing manually defined linking entry fields (760-788)...")
+    for field_num, description, repeatability in LINKING_ENTRY_FIELDS:
+        if field_num in seen_fields:
+            continue
+        seen_fields.add(field_num)
+
+        # Extract detailed information from the concise page
+        detailed_info = extract_detailed_field_info(field_num)
+
+        # Add the main field entry
+        field_key = field_num
+        field_value = f"{description} ({repeatability})"
+
+        field_entry = {
+            "Key": field_key,
+            "Value": field_value,
+            "Created": timestamp,
+        }
+
+        # Add detailed info if available
+        if detailed_info:
+            field_entry["Details"] = detailed_info
+
+        all_data[field_key] = field_entry
+        print(f"  Added: {field_key} - {field_value}")
+
+        # Extract subfields
+        if detailed_info and detailed_info.get("subfields"):
+            for subfield_code, subfield_info in detailed_info["subfields"].items():
+                subfield_key = f"{field_num}{subfield_code}"
+                subfield_value = (
+                    f"{subfield_info['description']} ({subfield_info['repeatability']})"
+                )
+                all_data[subfield_key] = {
+                    "Key": subfield_key,
+                    "Value": subfield_value,
+                    "Created": timestamp,
+                }
+                print(f"    Added: {subfield_key} - {subfield_value}")
+        else:
+            # Fallback to old method if detailed extraction failed
+            subfields = extract_subfields_from_concise(field_num)
+            for subfield_code, subfield_desc, subfield_repeat in subfields:
+                subfield_key = f"{field_num}{subfield_code}"
+                subfield_value = f"{subfield_desc} ({subfield_repeat})"
+                all_data[subfield_key] = {
+                    "Key": subfield_key,
+                    "Value": subfield_value,
+                    "Created": timestamp,
+                }
+                print(f"    Added: {subfield_key} - {subfield_value}")
 
     return all_data
 
