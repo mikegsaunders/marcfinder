@@ -56,6 +56,15 @@ marc -v 245     # Shows full definition, indicators, subfield descriptions, and 
 marc -v 020     # Shows complete field documentation from LOC
 ```
 
+**Update marcfinder:**
+
+```bash
+marc --update   # Pulls the latest changes from GitHub
+marc -up        # Short form
+```
+
+This runs `git pull` in the installation directory, so you don't need to navigate there manually.
+
 The tool automatically detects:
 
 - If your query starts with a digit, it's treated as a field code lookup

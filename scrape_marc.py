@@ -22,7 +22,7 @@ BASE_URL = "https://www.loc.gov/marc/bibliographic/"
 
 # Field range pages to scrape
 FIELD_RANGE_PAGES = [
-    "bd00x.html",  # Control Fields (001-008)
+    # "bd00x.html",  # Control Fields - SKIPPED: missing (R)/(NR) markers, handled via CONTROL_FIELDS
     "bd01x09x.html",  # Numbers and Code Fields (010-088)
     "bd1xx.html",  # Main Entry Fields (100, 110, 111, 130)
     "bd20x24x.html",  # Title and Title-Related Fields (210-247)
@@ -35,6 +35,19 @@ FIELD_RANGE_PAGES = [
     # "bd76x78x.html",  # Linking Entry Fields - SKIPPED: has grouped format, handled separately
     "bd80x83x.html",  # Series Added Entry Fields (800-830)
     "bd84188x.html",  # Holdings, Location, etc. (841-887)
+]
+
+# Manually defined control fields (LDR, 001-008)
+# bd00x.html index page omits (R)/(NR) markers so the regex doesn't match them;
+# LDR also has a non-numeric key and a different concise URL.
+CONTROL_FIELDS = [
+    ("LDR", "Leader", "NR"),
+    ("001", "Control Number", "NR"),
+    ("003", "Control Number Identifier", "NR"),
+    ("005", "Date and Time of Latest Transaction", "NR"),
+    ("006", "Fixed-Length Data Elements-Additional Material Characteristics", "R"),
+    ("007", "Physical Description Fixed Field", "R"),
+    ("008", "Fixed-Length Data Elements-General Information", "NR"),
 ]
 
 # Manually defined linking entry fields (760-788)
@@ -145,7 +158,11 @@ def extract_detailed_field_info(field_num: str) -> dict:
     Fetch detailed field information from the concise LOC page.
     Returns dict with definition, indicators, subfields, and examples.
     """
-    concise_url = urljoin(BASE_URL, f"concise/bd{field_num}.html")
+    # LDR has a non-standard URL
+    if field_num.upper() == "LDR":
+        concise_url = urljoin(BASE_URL, "concise/bdleader.html")
+    else:
+        concise_url = urljoin(BASE_URL, f"concise/bd{field_num}.html")
 
     try:
         soup = fetch_page(concise_url)
@@ -157,12 +174,35 @@ def extract_detailed_field_info(field_num: str) -> dict:
         }
 
         # Extract definition
+        # Standard pages use <div class="definition"><p>...</p></div>
+        # Control field pages use plain <p> tags after the last <hr/>
         definition_div = soup.find("div", class_="definition")
         if definition_div:
-            # Get text from paragraph, stripping extra whitespace
             p_tag = definition_div.find("p")
             if p_tag:
                 field_info["definition"] = " ".join(p_tag.get_text().split())
+        else:
+            # Fallback: control field pages use plain <p> tags for definition.
+            # Content appears after the <hr/> that follows <div class="datename">.
+            datename_div = soup.find("div", class_="datename")
+            if datename_div:
+                # Find the first <hr/> after the datename div
+                content_hr = None
+                for sibling in datename_div.find_next_siblings():
+                    if sibling.name == "hr":
+                        content_hr = sibling
+                        break
+                if content_hr:
+                    paragraphs = []
+                    for sibling in content_hr.find_next_siblings():
+                        if sibling.name in ("div", "table") and sibling.get("class"):
+                            break  # stop at examples/other sections
+                        if sibling.name == "p":
+                            text = " ".join(sibling.get_text().split())
+                            if text:
+                                paragraphs.append(text)
+                    if paragraphs:
+                        field_info["definition"] = " ".join(paragraphs)
 
         # Extract indicators
         indicators_div = soup.find("div", class_="indicators")
@@ -216,6 +256,8 @@ def extract_detailed_field_info(field_num: str) -> dict:
                     }
 
         # Extract examples
+        # Standard pages use <table class="examples">
+        # Control field pages use individual <div class="example"> with nested tables
         examples_table = soup.find("table", class_="examples")
         if examples_table:
             rows = examples_table.find_all("tr")
@@ -230,6 +272,23 @@ def extract_detailed_field_info(field_num: str) -> dict:
                     example_text = " ".join(example_text.split())
                     if example_text:
                         field_info["examples"].append(example_text)
+        else:
+            # Fallback: control field pages use <div class="example"> per example
+            example_divs = soup.find_all("div", class_="example")
+            for div in example_divs:
+                rows = div.find_all("tr")
+                for row in rows:
+                    cells = row.find_all("td")
+                    # Skip header/spacer rows (all empty)
+                    cell_texts = [
+                        c.get_text().strip() for c in cells if c.get_text().strip()
+                    ]
+                    if len(cell_texts) >= 2:
+                        # First non-empty cell is field tag, rest is data
+                        example_text = " ".join(cell_texts[1:])
+                        example_text = " ".join(example_text.split())
+                        if example_text:
+                            field_info["examples"].append(example_text)
 
         return field_info
 
@@ -368,6 +427,25 @@ def scrape_all_fields() -> Dict[str, dict]:
                         "Created": timestamp,
                     }
                     print(f"    Added: {subfield_key} - {subfield_value}")
+
+    # Process manually defined control fields (LDR, 001-008)
+    print("\nProcessing manually defined control fields (LDR, 001-008)...")
+    for field_num, description, repeatability in CONTROL_FIELDS:
+        if field_num in seen_fields:
+            continue
+        seen_fields.add(field_num)
+
+        detailed_info = extract_detailed_field_info(field_num)
+        field_value = f"{description} ({repeatability})"
+        field_entry = {
+            "Key": field_num,
+            "Value": field_value,
+            "Created": timestamp,
+        }
+        if detailed_info:
+            field_entry["Details"] = detailed_info
+        all_data[field_num] = field_entry
+        print(f"  Added: {field_num} - {field_value}")
 
     # Add manually defined field 222 (different HTML structure)
     print("\nAdding manually defined field 222...")

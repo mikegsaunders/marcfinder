@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -49,13 +50,13 @@ def load_verbose_data() -> Dict[str, dict]:
 
 
 def is_code_query(query: str) -> bool:
-    """Determine if query is a field code (starts with digit) or keyword (starts with letter)."""
-    return query and query[0].isdigit()
+    """Determine if query is a field code (starts with digit, or is 'ldr') or keyword."""
+    return query and (query[0].isdigit() or query.lower() == "ldr")
 
 
 def is_range_query(query: str) -> bool:
     """Determine if query is a range query like 1xx, 5xx."""
-    return len(query) == 3 and query[0].isdigit() and query[1:].lower() == 'xx'
+    return len(query) == 3 and query[0].isdigit() and query[1:].lower() == "xx"
 
 
 def search_by_range(data: Dict[str, dict], range_prefix: str) -> List[Tuple[str, dict]]:
@@ -279,15 +280,42 @@ def display_results(matches: List[Tuple[str, dict]], verbose: bool = False):
             print(format_output(key, entry["Value"]))
 
 
+def update_installation() -> None:
+    """Run git pull in the installation directory to update marcfinder."""
+    repo_dir = Path(__file__).parent.parent
+    print(f"{Fore.CYAN}Updating marcfinder from {repo_dir}...")
+    try:
+        result = subprocess.run(
+            ["git", "pull"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout:
+            print(result.stdout.rstrip())
+        if result.stderr:
+            print(result.stderr.rstrip())
+        if result.returncode == 0:
+            print(f"{Fore.GREEN}Update complete.")
+        else:
+            print(f"{Fore.RED}git pull failed (exit code {result.returncode}).")
+            sys.exit(result.returncode)
+    except FileNotFoundError:
+        print(f"{Fore.RED}Error: git not found. Is git installed and on your PATH?")
+        sys.exit(1)
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Look up MARC 21 bibliographic field definitions",
-        epilog="Examples:\n  marc 020      Look up ISBN field\n  marc 245a     Look up title subfield\n  marc 5xx      List all 5XX note fields\n  marc isbn     Search for ISBN-related fields\n  marc -v 245   Show detailed information for field 245",
+        epilog="Examples:\n  marc 020      Look up ISBN field\n  marc 245a     Look up title subfield\n  marc 5xx      List all 5XX note fields\n  marc isbn     Search for ISBN-related fields\n  marc -v 245   Show detailed information for field 245\n  marc --update Update marcfinder via git pull",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "query", help="Field code (e.g., 020, 245a), range (e.g., 5xx), or keyword to search for"
+        "query",
+        nargs="?",
+        help="Field code (e.g., 020, 245a), range (e.g., 5xx), or keyword to search for",
     )
     parser.add_argument(
         "-v",
@@ -295,8 +323,22 @@ def main():
         action="store_true",
         help="Show detailed field information (definition, indicators, examples)",
     )
+    parser.add_argument(
+        "-up",
+        "--update",
+        action="store_true",
+        help="Update marcfinder by running git pull in the installation directory",
+    )
 
     args = parser.parse_args()
+
+    if args.update:
+        update_installation()
+        return
+
+    if not args.query:
+        parser.print_help()
+        sys.exit(0)
 
     # Load data (verbose or regular)
     if args.verbose:
@@ -313,7 +355,9 @@ def main():
             matches = search_by_range(data, query)
             if matches:
                 range_name = f"{query[0]}XX"
-                print(f"{Fore.GREEN}Fields in {range_name} range ({len(matches)} total):\n")
+                print(
+                    f"{Fore.GREEN}Fields in {range_name} range ({len(matches)} total):\n"
+                )
                 display_results(matches, verbose=False)  # Never verbose for ranges
             else:
                 print(f"{Fore.YELLOW}No fields found in range: {Fore.WHITE}{query}")
