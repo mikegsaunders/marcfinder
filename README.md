@@ -18,11 +18,9 @@ This installs the `marc` command globally while keeping dependencies isolated.
 If you don't have pipx:
 
 ```bash
-python -m pip install --user pipx
-python -m pipx ensurepath
+# Install with uv (creates isolated environment)
+uv tool install -e .
 ```
-
-Then restart your terminal and run the installation command above.
 
 ## Usage
 
