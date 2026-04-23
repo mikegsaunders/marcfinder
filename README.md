@@ -9,18 +9,11 @@ CLI tool for looking up MARC 21 bibliographic field definitions.
 git clone https://github.com/mikegsaunders/marcfinder.git
 cd marcfinder
 
-# Install with pipx (creates isolated environment)
-pipx install -e .
-```
-
-This installs the `marc` command globally while keeping dependencies isolated.
-
-If you don't have pipx:
-
-```bash
 # Install with uv (creates isolated environment)
 uv tool install -e .
 ```
+
+This installs the `marc` command globally while keeping dependencies isolated.
 
 ## Usage
 
