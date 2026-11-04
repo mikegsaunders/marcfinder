@@ -1,4 +1,7 @@
 # Python
+.pytest_cache/
+.ruff_cache/
+.coverage
 __pycache__/
 *.py[cod]
 *$py.class
@@ -30,3 +33,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# scraper page cache
+.cache/

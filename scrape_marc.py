@@ -1,584 +1,553 @@
 #!/usr/bin/env python3
 """
-MARC 21 Bibliographic Field Scraper
+MARC 21 scraper (Bibliographic + Holdings).
 
-Scrapes field definitions from Library of Congress MARC 21 documentation
-and generates/updates marc.json with complete field and subfield data.
+Builds marc_cli/data/<format>.json from the Library of Congress "concise"
+documentation at https://www.loc.gov/marc/.
+
+    uv run --extra dev python scrape_marc.py            # use cached pages where present
+    uv run --extra dev python scrape_marc.py --refresh  # re-download everything
+
+Pages are cached in .cache/loc/ so re-runs are fast and polite to LOC.
+
+LOC uses several page templates, all handled here:
+  * "new" template:  div.definition / div.indicators (dl) / div.subfields (dl) /
+                     table.examples or div.examplesec, div.characterPositions
+  * "old" template:  bare <p> definition, div.indicatorhead + div.indicatorvalue,
+                     div.subfieldhead + div.subfieldvalue, div.example tables
+  * holdings 853-878: indicators/subfields live only on shared "general
+                     information" pages (e.g. hd863865.html)
+  * holdings leader: no concise page; parsed from the full page
 """
 
+import argparse
 import json
 import re
-import shutil
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
 from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
+ROOT = Path(__file__).parent
+CACHE_DIR = ROOT / ".cache" / "loc"
+DATA_DIR = ROOT / "marc_cli" / "data"
+LOC = "https://www.loc.gov/marc/"
+USER_AGENT = "marcfinder-scraper (+https://github.com/mikegsaunders/marcfinder)"
 
-BASE_URL = "https://www.loc.gov/marc/bibliographic/"
-
-# Field range pages to scrape
-FIELD_RANGE_PAGES = [
-    # "bd00x.html",  # Control Fields - SKIPPED: missing (R)/(NR) markers, handled via CONTROL_FIELDS
-    "bd01x09x.html",  # Numbers and Code Fields (010-088)
-    "bd1xx.html",  # Main Entry Fields (100, 110, 111, 130)
-    "bd20x24x.html",  # Title and Title-Related Fields (210-247)
-    "bd25x28x.html",  # Edition, Imprint, etc. (250-270)
-    "bd3xx.html",  # Physical Description, etc. (300-388)
-    "bd4xx.html",  # Series Statement Fields (400-490)
-    "bd5xx.html",  # Note Fields (500-588)
-    "bd6xx.html",  # Subject Access Fields (600-688)
-    "bd70x75x.html",  # Added Entry Fields (700-758)
-    # "bd76x78x.html",  # Linking Entry Fields - SKIPPED: has grouped format, handled separately
-    "bd80x83x.html",  # Series Added Entry Fields (800-830)
-    "bd84188x.html",  # Holdings, Location, etc. (841-887)
-]
-
-# Manually defined control fields (LDR, 001-008)
-# bd00x.html index page omits (R)/(NR) markers so the regex doesn't match them;
-# LDR also has a non-numeric key and a different concise URL.
-CONTROL_FIELDS = [
-    ("LDR", "Leader", "NR"),
-    ("001", "Control Number", "NR"),
-    ("003", "Control Number Identifier", "NR"),
-    ("005", "Date and Time of Latest Transaction", "NR"),
-    ("006", "Fixed-Length Data Elements-Additional Material Characteristics", "R"),
-    ("007", "Physical Description Fixed Field", "R"),
-    ("008", "Fixed-Length Data Elements-General Information", "NR"),
-]
-
-# Manually defined linking entry fields (760-788)
-# These have a different page structure and need special handling
-LINKING_ENTRY_FIELDS = [
-    ("760", "Main Series Entry", "R"),
-    ("762", "Subseries Entry", "R"),
-    ("765", "Original Language Entry", "R"),
-    ("767", "Translation Entry", "R"),
-    ("770", "Supplement/Special Issue Entry", "R"),
-    ("772", "Supplement Parent Entry", "R"),
-    ("773", "Host Item Entry", "R"),
-    ("774", "Constituent Unit Entry", "R"),
-    ("775", "Other Edition Entry", "R"),
-    ("776", "Additional Physical Form Entry", "R"),
-    ("777", "Issued With Entry", "R"),
-    ("780", "Preceding Entry", "R"),
-    ("785", "Succeeding Entry", "R"),
-    ("786", "Data Source Entry", "R"),
-    ("787", "Other Relationship Entry", "R"),
-    ("788", "Parallel Description in Another Language of Cataloging", "R"),
-]
-
-# Manually defined field 222 (has different HTML structure requiring manual override)
-FIELD_222_MANUAL = {
-    "Key": "222",
-    "Value": "Key Title (R)",
-    "Details": {
-        "definition": "Unique title for a continuing resource that is assigned in conjunction with an ISSN recorded in field 022 by national centers under the auspices of the ISSN Network.",
-        "indicators": {
-            "First - Undefined": ["# - Undefined"],
-            "Second - Nonfiling characters": [
-                "0 - No nonfiling characters",
-                "1-9 - Number of nonfiling characters",
-            ],
-        },
-        "subfields": {
-            "a": {
-                "description": "Key title",
-                "extended": "",
-                "repeatability": "NR",
-            },
-            "b": {
-                "description": "Qualifying information",
-                "extended": "Parenthetical information that qualifies the title to make it unique.",
-                "repeatability": "NR",
-            },
-            "6": {
-                "description": "Linkage",
-                "extended": "See description of this subfield in Appendix A: Control Subfields.",
-                "repeatability": "NR",
-            },
-            "8": {
-                "description": "Field link and sequence number",
-                "extended": "See description of this subfield in Appendix A: Control Subfields.",
-                "repeatability": "R",
-            },
-        },
-        "examples": [
-            "#0$aViva$b(New York)",
-            "#0$aCauses of death",
-            "#4$aDer Öffentliche Dienst$b(Köln)",
-            "#0$aJournal of polymer science. Part B. Polymer letters",
-            "#0$aEconomic education bulletin$b(Great Barrington)",
+FORMATS = {
+    "bibliographic": {
+        "prefix": "bd",
+        "index_pages": [
+            "bd00x.html", "bd01x09x.html", "bd1xx.html", "bd20x24x.html",
+            "bd25x28x.html", "bd3xx.html", "bd4xx.html", "bd5xx.html",
+            "bd6xx.html", "bd70x75x.html", "bd76x78x.html", "bd760787.html",
+            "bd80x83x.html", "bd84188x.html",
+        ],
+        "leader": "concise/bdleader.html",
+        "group_pages": [],
+    },
+    "holdings": {
+        "prefix": "hd",
+        "index_pages": [
+            "hd00x.html", "hd0xx.html", "hd5xx84x.html", "hd852856.html",
+            "hd853855.html", "hd863865.html", "hd866868.html",
+            "hd876878.html", "hd88x.html",
+        ],
+        "leader": "hdleader.html",
+        # Fields whose indicators/subfields are only documented on a shared page
+        "group_pages": [
+            "hd853855.html", "hd863865.html", "hd866868.html", "hd876878.html",
         ],
     },
 }
 
+# Extra search terms that don't appear in the official field names
+ALIASES = {
+    "bibliographic": {
+        "010": ["LCCN"], "020": ["ISBN"], "022": ["ISSN"], "024": ["ISMN", "UPC", "EAN", "DOI"],
+        "035": ["OCLC", "system control number"], "050": ["LC call number", "LCC"],
+        "082": ["Dewey", "DDC"], "100": ["author"], "245": ["title"],
+        "260": ["imprint", "publisher"], "264": ["imprint", "publisher", "RDA"],
+        "300": ["extent", "pagination"], "336": ["RDA"], "337": ["RDA"], "338": ["RDA"],
+        "650": ["subject heading", "LCSH"], "856": ["URL", "URI", "link"],
+    },
+    "holdings": {
+        "852": ["call number", "shelfmark", "location"], "856": ["URL", "URI", "link"],
+        "863": ["enumeration", "chronology"], "866": ["summary holdings"],
+        "876": ["barcode", "item"],
+    },
+}
 
-def fetch_page(url: str) -> BeautifulSoup:
-    """Fetch and parse a web page."""
-    print(f"Fetching {url}...")
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    return BeautifulSoup(response.content, "html.parser")
-
-
-def extract_field_links(soup: BeautifulSoup) -> List[Tuple[str, str, str]]:
-    """
-    Extract field numbers and their descriptions from a field range index page.
-    Returns list of (field_number, description, repeatability) tuples.
-    """
-    fields = []
-
-    # Look for patterns like "020 - International Standard Book Number (R)"
-    # These appear as text in the page, often in <strong> tags or plain text
-    text_content = soup.get_text()
-
-    # Pattern: 3 digits, space/dash, description, repeatability in parens
-    pattern = r"(\d{3})\s*[-–]\s*([^(]+?)\s*\(([RN]{1,2})\)"
-
-    for match in re.finditer(pattern, text_content):
-        field_num = match.group(1)
-        description = match.group(2).strip()
-        repeatability = match.group(3).strip()
-
-        # Skip obsolete fields
-        if "[OBSOLETE]" in description.upper() or "OBSOLETE" in description.upper():
-            continue
-
-        fields.append((field_num, description, repeatability))
-
-    return fields
+TAG_RE = re.compile(r"(?<![\d/$.])(\d{3})(?![\d/])")
+HEADING_RE = re.compile(r"^(?:(\d{3}|Leader)\s*-\s*)?(.*?)\s*\((R|NR)\)\s*$", re.I)
+SUBFIELD_RE = re.compile(r"^\$(\w)\s*-\s*(.*?)\s*\((R|NR)\)\s*(\[[^\]]*\])?\s*$")
+CODE_LABEL_RE = re.compile(r"^(.+?)\s+-\s+(.*)$")
 
 
-def extract_detailed_field_info(field_num: str) -> dict:
-    """
-    Fetch detailed field information from the concise LOC page.
-    Returns dict with definition, indicators, subfields, and examples.
-    """
-    # LDR has a non-standard URL
-    if field_num.upper() == "LDR":
-        concise_url = urljoin(BASE_URL, "concise/bdleader.html")
-    else:
-        concise_url = urljoin(BASE_URL, f"concise/bd{field_num}.html")
+# --------------------------------------------------------------------------- fetching
 
-    try:
-        soup = fetch_page(concise_url)
-        field_info = {
-            "definition": "",
-            "indicators": {},
-            "subfields": {},
-            "examples": [],
-        }
-
-        # Extract definition
-        # Standard pages use <div class="definition"><p>...</p></div>
-        # Control field pages use plain <p> tags after the last <hr/>
-        definition_div = soup.find("div", class_="definition")
-        if definition_div:
-            p_tag = definition_div.find("p")
-            if p_tag:
-                field_info["definition"] = " ".join(p_tag.get_text().split())
-        else:
-            # Fallback: control field pages use plain <p> tags for definition.
-            # Content appears after the <hr/> that follows <div class="datename">.
-            datename_div = soup.find("div", class_="datename")
-            if datename_div:
-                # Find the first <hr/> after the datename div
-                content_hr = None
-                for sibling in datename_div.find_next_siblings():
-                    if sibling.name == "hr":
-                        content_hr = sibling
-                        break
-                if content_hr:
-                    paragraphs = []
-                    for sibling in content_hr.find_next_siblings():
-                        if sibling.name in ("div", "table") and sibling.get("class"):
-                            break  # stop at examples/other sections
-                        if sibling.name == "p":
-                            text = " ".join(sibling.get_text().split())
-                            if text:
-                                paragraphs.append(text)
-                    if paragraphs:
-                        field_info["definition"] = " ".join(paragraphs)
-
-        # Extract indicators
-        indicators_div = soup.find("div", class_="indicators")
-        if indicators_div:
-            dts = indicators_div.find_all("dt")
-            for dt in dts:
-                indicator_name = dt.get_text().strip()
-                # Get all dd siblings until next dt
-                values = []
-                for sibling in dt.find_next_siblings():
-                    if sibling.name == "dt":
-                        break
-                    if sibling.name == "dd":
-                        value_text = sibling.get_text().strip()
-                        # Clean up excessive whitespace
-                        value_text = " ".join(value_text.split())
-                        values.append(value_text)
-                if values:
-                    field_info["indicators"][indicator_name] = values
-
-        # Extract subfields with detailed descriptions
-        subfields_div = soup.find("div", class_="subfields")
-        if subfields_div:
-            dls = subfields_div.find_all("dl")
-            for dl in dls:
-                dt = dl.find("dt")
-                if not dt:
-                    continue
-
-                # Extract subfield code and description from dt
-                dt_text = dt.get_text()
-                # Pattern: $a - Description (R)
-                pattern = r"\$([a-z0-9])\s*[-–]\s*([^(]+?)\s*\(([RN]{1,2})\)"
-                match = re.search(pattern, dt_text, re.IGNORECASE)
-
-                if match:
-                    subfield_code = match.group(1).lower()
-                    short_desc = match.group(2).strip()
-                    repeatability = match.group(3).strip()
-
-                    # Get extended description from dd if present
-                    extended_desc = ""
-                    dd = dl.find("dd")
-                    if dd:
-                        extended_desc = " ".join(dd.get_text().split())
-
-                    field_info["subfields"][subfield_code] = {
-                        "description": short_desc,
-                        "extended": extended_desc,
-                        "repeatability": repeatability,
-                    }
-
-        # Extract examples
-        # Standard pages use <table class="examples">
-        # Control field pages use individual <div class="example"> with nested tables
-        examples_table = soup.find("table", class_="examples")
-        if examples_table:
-            rows = examples_table.find_all("tr")
-            for row in rows:
-                cells = row.find_all("td")
-                if len(cells) >= 2:
-                    # First cell is field tag, rest is the example
-                    example_text = " ".join(
-                        cell.get_text().strip() for cell in cells[1:]
-                    )
-                    # Clean up excessive whitespace
-                    example_text = " ".join(example_text.split())
-                    if example_text:
-                        field_info["examples"].append(example_text)
-        else:
-            # Fallback: control field pages use <div class="example"> per example
-            example_divs = soup.find_all("div", class_="example")
-            for div in example_divs:
-                rows = div.find_all("tr")
-                for row in rows:
-                    cells = row.find_all("td")
-                    # Skip header/spacer rows (all empty)
-                    cell_texts = [
-                        c.get_text().strip() for c in cells if c.get_text().strip()
-                    ]
-                    if len(cell_texts) >= 2:
-                        # First non-empty cell is field tag, rest is data
-                        example_text = " ".join(cell_texts[1:])
-                        example_text = " ".join(example_text.split())
-                        if example_text:
-                            field_info["examples"].append(example_text)
-
-        return field_info
-
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            print(
-                f"  No concise page found for field {field_num} (may be control field)"
-            )
-            return None
-        raise
-    except Exception as e:
-        print(f"  Error extracting detailed info for {field_num}: {e}")
-        return None
+session = requests.Session()
+session.headers["User-Agent"] = USER_AGENT
 
 
-def extract_subfields_from_concise(field_num: str) -> List[Tuple[str, str, str]]:
-    """
-    Fetch the concise version of a field page and extract subfield definitions.
-    Returns list of (subfield_code, description, repeatability) tuples.
-    (Kept for backward compatibility with basic mode)
-    """
-    concise_url = urljoin(BASE_URL, f"concise/bd{field_num}.html")
-
-    try:
-        soup = fetch_page(concise_url)
-        subfields = []
-
-        # Look for subfield patterns: $a - Description (R) or **$a - Description (R)**
-        text_content = soup.get_text()
-
-        # Pattern: $letter/digit - description (R/NR)
-        pattern = r"\$([a-z0-9])\s*[-–]\s*([^(]+?)\s*\(([RN]{1,2})\)"
-
-        for match in re.finditer(pattern, text_content, re.IGNORECASE):
-            subfield_code = match.group(1).lower()
-            description = match.group(2).strip()
-            repeatability = match.group(3).strip()
-
-            # Clean up description
-            description = re.sub(r"\s+", " ", description)
-
-            # Skip if description is too short or looks malformed
-            if len(description) < 3:
-                continue
-
-            subfields.append((subfield_code, description, repeatability))
-
-        return subfields
-
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            print(
-                f"  No concise page found for field {field_num} (may be control field)"
-            )
-            return []
-        raise
-    except Exception as e:
-        print(f"  Error extracting subfields for {field_num}: {e}")
-        return []
+def fetch(url: str, refresh: bool = False) -> str | None:
+    """Return page HTML (cached), or None on 404."""
+    cache_file = CACHE_DIR / re.sub(r"[^\w.-]", "_", url.removeprefix(LOC))
+    if not refresh and cache_file.exists():
+        text = cache_file.read_text(encoding="utf-8")
+        return text or None
+    for attempt in range(3):
+        try:
+            r = session.get(url, timeout=30)
+            if r.status_code == 404:
+                text = ""
+                break
+            r.raise_for_status()
+            text = r.content.decode("utf-8", errors="replace")
+            break
+        except requests.RequestException as e:
+            if attempt == 2:
+                raise
+            print(f"  retrying {url}: {e}", file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(text, encoding="utf-8")
+    return text or None
 
 
-def scrape_all_fields() -> Dict[str, dict]:
-    """
-    Scrape all MARC fields and subfields from LOC documentation.
-    Returns dictionary in marc.json format with detailed information.
-    """
-    all_data = {}
-    timestamp = datetime.now(timezone.utc).isoformat()
+def soup_of(html: str) -> BeautifulSoup:
+    return BeautifulSoup(html, "html.parser")
 
-    # Track all field numbers we've seen
-    seen_fields = set()
 
-    # Process each field range page
-    for page in FIELD_RANGE_PAGES:
-        print(f"\nProcessing {page}...")
-        url = urljoin(BASE_URL, page)
-        soup = fetch_page(url)
+# --------------------------------------------------------------------------- text helpers
 
-        # Extract field definitions from index page
-        fields = extract_field_links(soup)
-        print(f"  Found {len(fields)} fields")
 
-        for field_num, description, repeatability in fields:
-            if field_num in seen_fields:
-                continue
-            seen_fields.add(field_num)
+def clean(text: str) -> str:
+    return " ".join(text.split())
 
-            # Skip field 222 - has manual override due to different HTML structure
-            if field_num == "222":
-                continue
 
-            # Extract detailed information from the concise page
-            detailed_info = extract_detailed_field_info(field_num)
+def own_text(el: Tag, skip=("p", "div", "dd", "dl")) -> str:
+    """Text of an element, excluding nested block children (descriptions)."""
+    parts = []
+    for child in el.children:
+        if isinstance(child, NavigableString):
+            parts.append(str(child))
+        elif isinstance(child, Tag) and child.name not in skip:
+            parts.append(child.get_text())
+    return clean("".join(parts))
 
-            # Add the main field entry
-            field_key = field_num
-            # Special case: add (ISBN) to field 020 for better searchability
-            if field_num == "020":
-                field_value = f"{description} (ISBN) ({repeatability})"
-            else:
-                field_value = f"{description} ({repeatability})"
 
-            field_entry = {
-                "Key": field_key,
-                "Value": field_value,
-                "Created": timestamp,
-            }
+def block_text(el: Tag | None) -> str:
+    if el is None:
+        return ""
+    paras = [clean(p.get_text()) for p in el.find_all("p")]
+    paras = [p for p in paras if p]
+    return "\n\n".join(paras) if paras else clean(el.get_text())
 
-            # Add detailed info if available
-            if detailed_info:
-                field_entry["Details"] = detailed_info
 
-            all_data[field_key] = field_entry
-            print(f"  Added: {field_key} - {field_value}")
+def split_code(text: str) -> tuple[str, str]:
+    m = CODE_LABEL_RE.match(text)
+    return (m.group(1).strip(), m.group(2).strip()) if m else (text, "")
 
-            # Extract subfields (simple format for backward compatibility)
-            if detailed_info and detailed_info.get("subfields"):
-                for subfield_code, subfield_info in detailed_info["subfields"].items():
-                    subfield_key = f"{field_num}{subfield_code}"
-                    subfield_value = f"{subfield_info['description']} ({subfield_info['repeatability']})"
-                    all_data[subfield_key] = {
-                        "Key": subfield_key,
-                        "Value": subfield_value,
-                        "Created": timestamp,
-                    }
-                    print(f"    Added: {subfield_key} - {subfield_value}")
-            else:
-                # Fallback to old method if detailed extraction failed
-                subfields = extract_subfields_from_concise(field_num)
-                for subfield_code, subfield_desc, subfield_repeat in subfields:
-                    subfield_key = f"{field_num}{subfield_code}"
-                    subfield_value = f"{subfield_desc} ({subfield_repeat})"
-                    all_data[subfield_key] = {
-                        "Key": subfield_key,
-                        "Value": subfield_value,
-                        "Created": timestamp,
-                    }
-                    print(f"    Added: {subfield_key} - {subfield_value}")
 
-    # Process manually defined control fields (LDR, 001-008)
-    print("\nProcessing manually defined control fields (LDR, 001-008)...")
-    for field_num, description, repeatability in CONTROL_FIELDS:
-        if field_num in seen_fields:
-            continue
-        seen_fields.add(field_num)
+def has_class(el, *names) -> bool:
+    return isinstance(el, Tag) and any(c in (el.get("class") or []) for c in names)
 
-        detailed_info = extract_detailed_field_info(field_num)
-        field_value = f"{description} ({repeatability})"
-        field_entry = {
-            "Key": field_num,
-            "Value": field_value,
-            "Created": timestamp,
-        }
-        if detailed_info:
-            field_entry["Details"] = detailed_info
-        all_data[field_num] = field_entry
-        print(f"  Added: {field_num} - {field_value}")
 
-    # Add manually defined field 222 (different HTML structure)
-    print("\nAdding manually defined field 222...")
-    timestamp = datetime.now(timezone.utc).isoformat()
-    field_222 = FIELD_222_MANUAL.copy()
-    field_222["Created"] = timestamp
-    all_data["222"] = field_222
-    print(f"  Added: 222 - Key Title (R)")
+# --------------------------------------------------------------------------- page parsing
 
-    # Add subfields for field 222
-    for subfield_code, subfield_info in FIELD_222_MANUAL["Details"][
-        "subfields"
-    ].items():
-        subfield_key = f"222{subfield_code}"
-        subfield_value = (
-            f"{subfield_info['description']} ({subfield_info['repeatability']})"
-        )
-        all_data[subfield_key] = {
-            "Key": subfield_key,
-            "Value": subfield_value,
-            "Created": timestamp,
-        }
-        print(f"    Added: {subfield_key} - {subfield_value}")
 
-    # Process manually defined linking entry fields (760-788)
-    print("\nProcessing manually defined linking entry fields (760-788)...")
-    for field_num, description, repeatability in LINKING_ENTRY_FIELDS:
-        if field_num in seen_fields:
-            continue
-        seen_fields.add(field_num)
+def parse_heading(soup: BeautifulSoup) -> tuple[str, bool | None]:
+    h1 = soup.find("h1")
+    text = clean(h1.get_text()) if h1 else ""
+    m = HEADING_RE.match(text)
+    if not m:
+        return text, None
+    return m.group(2).strip(), m.group(3).upper() == "R"
 
-        # Extract detailed information from the concise page
-        detailed_info = extract_detailed_field_info(field_num)
 
-        # Add the main field entry
-        field_key = field_num
-        field_value = f"{description} ({repeatability})"
+def parse_definition(soup: BeautifulSoup) -> str:
+    div = soup.find("div", class_="definition")
+    if div:
+        return block_text(div)
+    # Old template: bare <p> tags after the heading, before the first section
+    h1 = soup.find("h1")
+    paras = []
+    for el in h1.find_all_next() if h1 else []:
+        if has_class(el, "indicatorhead", "subfieldhead", "examplehead", "example",
+                     "characterposition", "characterPositions"):
+            break
+        if el.name in ("h3", "h4") and paras:
+            break
+        if el.name == "p" and not el.find_parent(class_=["example", "examples"]):
+            t = clean(el.get_text())
+            if t:
+                paras.append(t)
+    return "\n\n".join(paras)
 
-        field_entry = {
-            "Key": field_key,
-            "Value": field_value,
-            "Created": timestamp,
-        }
 
-        # Add detailed info if available
-        if detailed_info:
-            field_entry["Details"] = detailed_info
-
-        all_data[field_key] = field_entry
-        print(f"  Added: {field_key} - {field_value}")
-
-        # Extract subfields
-        if detailed_info and detailed_info.get("subfields"):
-            for subfield_code, subfield_info in detailed_info["subfields"].items():
-                subfield_key = f"{field_num}{subfield_code}"
-                subfield_value = (
-                    f"{subfield_info['description']} ({subfield_info['repeatability']})"
+def parse_indicators(soup: BeautifulSoup) -> list[dict]:
+    indicators = []
+    div = soup.find("div", class_="indicators")
+    if div:  # new template: <dt>First - Name</dt><dd>0 - Value <p>desc</p></dd>
+        current = None
+        for el in div.find_all(["dt", "dd"]):
+            if el.name == "dt":
+                pos, name = split_code(own_text(el, skip=("p", "div", "span")))
+                current = {"position": pos, "name": name, "values": []}
+                desc = clean(" ".join(s.get_text() for s in el.find_all("span", recursive=False)))
+                if desc:
+                    current["description"] = desc
+                indicators.append(current)
+            elif current is not None:
+                code, label = split_code(own_text(el))
+                current["values"].append(
+                    {"code": code, "label": label, "description": block_text_or_empty(el)}
                 )
-                all_data[subfield_key] = {
-                    "Key": subfield_key,
-                    "Value": subfield_value,
-                    "Created": timestamp,
-                }
-                print(f"    Added: {subfield_key} - {subfield_value}")
-        else:
-            # Fallback to old method if detailed extraction failed
-            subfields = extract_subfields_from_concise(field_num)
-            for subfield_code, subfield_desc, subfield_repeat in subfields:
-                subfield_key = f"{field_num}{subfield_code}"
-                subfield_value = f"{subfield_desc} ({subfield_repeat})"
-                all_data[subfield_key] = {
-                    "Key": subfield_key,
-                    "Value": subfield_value,
-                    "Created": timestamp,
-                }
-                print(f"    Added: {subfield_key} - {subfield_value}")
-
-    return all_data
+        return indicators
+    # old template: nested div.indicatorvalue
+    for top in soup.find_all("div", class_="indicatorvalue"):
+        if top.find_parent("div", class_="indicatorvalue"):
+            continue
+        pos, name = split_code(own_text(top))
+        values = []
+        for v in top.find_all("div", class_="indicatorvalue"):
+            code, label = split_code(own_text(v))
+            desc = v.find("div", class_="description")
+            values.append({"code": code, "label": label,
+                           "description": clean(desc.get_text()) if desc else ""})
+        indicators.append({"position": pos, "name": name, "values": values})
+    return indicators
 
 
-def backup_existing_file(filepath: Path):
-    """Create a backup of the existing file."""
-    if filepath.exists():
-        backup_path = filepath.with_suffix(".json.backup")
-        print(f"\nBacking up existing file to {backup_path}")
-        shutil.copy2(filepath, backup_path)
+def block_text_or_empty(el: Tag) -> str:
+    paras = [clean(p.get_text()) for p in el.find_all(["p", "div"])]
+    return "\n\n".join(p for p in paras if p)
 
 
-def main():
-    """Main scraper execution."""
-    print("MARC 21 Field Scraper")
-    print("=" * 50)
+def make_subfield(text: str, description: str = "") -> dict | None:
+    m = SUBFIELD_RE.match(clean(text))
+    if not m or "OBSOLETE" in m.group(2).upper():
+        return None
+    return {"code": m.group(1).lower(), "name": m.group(2).strip(),
+            "repeatable": m.group(3).upper() == "R", "description": description}
 
-    verbose_file = Path(__file__).parent / "marc-verbose.json"
-    simple_file = Path(__file__).parent / "marc.json"
 
-    # Backup existing files
-    backup_existing_file(verbose_file)
-    backup_existing_file(simple_file)
+def parse_subfields(soup: BeautifulSoup) -> list[dict]:
+    subfields = []
+    div = soup.find("div", class_="subfields")
+    if div:  # new template: <dl><dt>$a - Name (NR)</dt><dd>desc</dd></dl>
+        for dt in div.find_all("dt"):
+            dd = dt.find_next_sibling()
+            desc = clean(dd.get_text()) if dd is not None and dd.name == "dd" else ""
+            sf = make_subfield(dt.get_text(), desc)
+            if sf:
+                subfields.append(sf)
+        return subfields
+    for el in soup.find_all("div", class_="subfieldvalue"):  # old template
+        desc = el.find("div", class_="description")
+        sf = make_subfield(own_text(el), clean(desc.get_text()) if desc else "")
+        if sf:
+            subfields.append(sf)
+    return subfields
 
-    # Scrape all fields
-    print("\nStarting scrape...")
-    all_data = scrape_all_fields()
 
-    # Sort by key for consistent ordering
-    sorted_data = dict(sorted(all_data.items()))
+def parse_examples(soup: BeautifulSoup) -> list[str]:
+    examples = []
+    containers = soup.find_all(["table", "div"], class_=["examples", "example", "examplesec"])
+    seen_rows = set()
+    for c in containers:
+        for tr in c.find_all("tr"):
+            if id(tr) in seen_rows:
+                continue
+            seen_rows.add(id(tr))
+            cells = [clean(td.get_text()) for td in tr.find_all("td")]
+            cells = [x for x in cells if x]
+            if len(cells) >= 2:
+                ex = " ".join(cells[1:])
+                if ex not in examples:
+                    examples.append(ex)
+    return examples
 
-    # Write verbose file (with Details)
-    print(f"\nWriting {len(sorted_data)} entries to {verbose_file}")
-    with open(verbose_file, "w", encoding="utf-8") as f:
-        json.dump(sorted_data, f, indent=2, ensure_ascii=False)
 
-    # Create simple version (without Details)
-    simple_data = {}
-    for key, entry in sorted_data.items():
-        simple_data[key] = {
-            "Key": entry["Key"],
-            "Value": entry["Value"],
-            "Created": entry["Created"],
+def parse_positions(soup: BeautifulSoup) -> list[dict]:
+    positions = []
+    div = soup.find("div", class_="characterPositions")
+    if div:  # new template
+        for item in div.find_all("div", recursive=False):
+            strong = item.find("strong")
+            if not strong:
+                continue
+            pos, name = split_code(clean(strong.get_text()))
+            desc_div = next((d for d in item.find_all("div", recursive=False)
+                             if not has_class(d, "value")), None)
+            values = []
+            for v in item.find_all("div", class_="value", recursive=False):
+                label_el = v.find(class_="valueLabel")
+                code, label = split_code(clean(label_el.get_text()) if label_el else "")
+                vdesc = label_el.find_next_sibling("div") if label_el else None
+                values.append({"code": code, "label": label, "description": block_text(vdesc)
+                               if vdesc else ""})
+            positions.append({"position": pos, "name": name,
+                              "description": block_text(desc_div) if desc_div else "",
+                              "values": values})
+        return positions
+    for item in soup.find_all("div", class_="characterposition"):  # old/full template
+        strong = item.find("strong")
+        if not strong:
+            continue
+        pos, name = split_code(clean(strong.get_text()))
+        desc = item.find("div", class_="description", recursive=False)
+        values = []
+        for v in item.find_all("div", class_="charactervalue", recursive=False):
+            vs = v.find("strong")
+            code, label = split_code(clean(vs.get_text()) if vs else own_text(v))
+            vdesc = v.find("div", class_="description")
+            values.append({"code": code, "label": label,
+                           "description": clean(vdesc.get_text()) if vdesc else ""})
+        entry = {"position": pos, "name": name,
+                 "description": clean(desc.get_text()) if desc else "", "values": values}
+        # 006 lists every material type on one page under "006--BOOKS" style headings
+        heading = item.find_previous(string=re.compile(r"^\s*\d{3}--\S"))
+        if heading:
+            entry["group"] = clean(heading).split("--", 1)[1].title()
+        positions.append(entry)
+    return positions
+
+
+def parse_field_page(html: str) -> dict:
+    soup = soup_of(html)
+    name, repeatable = parse_heading(soup)
+    return {
+        "name": name,
+        "repeatable": repeatable,
+        "definition": parse_definition(soup),
+        "indicators": parse_indicators(soup),
+        "subfields": parse_subfields(soup),
+        "positions": parse_positions(soup),
+        "examples": parse_examples(soup),
+    }
+
+
+def parse_group_page(html: str) -> tuple[list[str], list[dict], list[dict]]:
+    """Holdings general-information pages: (tags, indicators, subfields).
+
+    Values may carry a "[863/864]" note meaning they apply only to those tags;
+    that is kept in an "only" list.
+    """
+    soup = soup_of(html)
+    tags = []
+    for toc in soup.find_all("div", class_="fieldtoc"):
+        m = re.match(r"(\d{3})", clean(toc.get_text()))
+        if m:
+            tags.append(m.group(1))
+
+    def lines(td: Tag) -> list[str]:
+        # split on <br> only, so inline notes like <em>[863/864]</em> stay on their line
+        td = soup_of(re.sub(r"<br\s*/?>", "\n", str(td)))
+        return [clean(x) for x in td.get_text().split("\n") if clean(x)]
+
+    def restrict(text: str) -> tuple[str, list[str]]:
+        m = re.search(r"\[([\d/,\s]+)\]\s*$", text)
+        if not m:
+            return text, []
+        return text[: m.start()].strip(), re.findall(r"\d{3}", m.group(1))
+
+    indicators, subfields = [], []
+    for td in soup.find_all("td"):
+        strong = td.find("strong")
+        label = clean(strong.get_text()) if strong else ""
+        if label in ("First Indicator", "Second Indicator") and not indicators_has(indicators, label):
+            ls = lines(td)
+            em = td.find("em")
+            ind = {"position": label.split()[0], "name": clean(em.get_text()) if em else "",
+                   "values": []}
+            for line in ls[1:]:
+                text, only = restrict(line)
+                code, lab = split_code(text)
+                if lab:
+                    v = {"code": code, "label": lab, "description": ""}
+                    if only:
+                        v["only"] = only
+                    ind["values"].append(v)
+            indicators.append(ind)
+        elif "$" in td.get_text() and not td.find("table"):
+            for line in lines(td):
+                text, only = restrict(line)
+                sf = make_subfield(text)
+                if sf and not any(s["code"] == sf["code"] for s in subfields):
+                    if only:
+                        sf["only"] = only
+                    subfields.append(sf)
+    return tags, indicators, subfields
+
+
+def indicators_has(indicators, label):
+    return any(i["position"] == label.split()[0] for i in indicators)
+
+
+def apply_only(items: list[dict], tag: str) -> list[dict]:
+    out = []
+    for it in items:
+        if "only" in it and tag not in it["only"]:
+            continue
+        out.append({k: v for k, v in it.items() if k != "only"})
+    return out
+
+
+# --------------------------------------------------------------------------- orchestration
+
+
+def discover_tags(fmt: str, cfg: dict, refresh: bool) -> list[str]:
+    tags = set()
+    for page in cfg["index_pages"]:
+        html = fetch(urljoin(LOC + fmt + "/", page), refresh)
+        if not html:
+            print(f"  ! index page missing: {page}", file=sys.stderr)
+            continue
+        soup = soup_of(html)
+        for a in soup.find_all("a", href=True):
+            m = re.search(rf"{cfg['prefix']}(\d{{3}})\.html$", a["href"])
+            if m:
+                tags.add(m.group(1))
+        for strong in soup.find_all(["strong", "li", "div"]):
+            m = re.match(r"\s*(\d{3})\s*-\s*[A-Z]", strong.get_text())
+            if m:
+                tags.add(m.group(1))
+    return sorted(tags)
+
+
+def scrape_field(fmt: str, cfg: dict, tag: str, refresh: bool) -> dict | None:
+    url = f"{LOC}{fmt}/concise/{cfg['prefix']}{tag}.html"
+    html = fetch(url, refresh)
+    if not html:
+        return None
+    field = parse_field_page(html)
+    if "OBSOLETE" in field["name"].upper() or field["repeatable"] is None:
+        return None
+    field = {"tag": tag, **field, "url": url}
+
+    if any("group" in p for p in field["positions"]):
+        groups: dict[str, list] = {}
+        for p in field.pop("positions"):
+            groups.setdefault(p.pop("group", ""), []).append(p)
+        field["positions"] = groups.pop("", [])
+        field["variants"] = [{"code": "", "name": g, "definition": "", "positions": ps, "url": url}
+                             for g, ps in groups.items()]
+
+    # 007 / 008: per-material sub-pages (bd008b.html, bd007m.html, ...)
+    soup = soup_of(html)
+    variant_pages = sorted({a["href"] for a in soup.find_all("a", href=True)
+                            if re.fullmatch(rf"{cfg['prefix']}{tag}[a-z]\.html", a["href"])})
+    if variant_pages:
+        field["variants"] = []
+        for vp in variant_pages:
+            vurl = urljoin(url, vp)
+            vhtml = fetch(vurl, refresh)
+            if not vhtml:
+                continue
+            v = parse_field_page(vhtml)
+            field["variants"].append({
+                "code": vp[len(cfg["prefix"]) + 3:-5],
+                "name": v["name"],
+                "definition": v["definition"],
+                "positions": v["positions"],
+                "url": vurl,
+            })
+    return field
+
+
+def scrape_format(fmt: str, refresh: bool, workers: int) -> dict:
+    cfg = FORMATS[fmt]
+    print(f"\n== {fmt}")
+    tags = discover_tags(fmt, cfg, refresh)
+    print(f"  {len(tags)} candidate tags")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda t: scrape_field(fmt, cfg, t, refresh), tags))
+    fields = {f["tag"]: f for f in results if f}
+
+    # Leader
+    lurl = urljoin(LOC + fmt + "/", cfg["leader"])
+    lhtml = fetch(lurl, refresh)
+    if lhtml:
+        ldr = parse_field_page(lhtml)
+        ldr["name"] = "Leader"
+        ldr["repeatable"] = False
+        fields["LDR"] = {"tag": "LDR", **ldr, "url": lurl}
+
+    # Shared indicator/subfield definitions for holdings field groups
+    for page in cfg["group_pages"]:
+        html = fetch(urljoin(LOC + fmt + "/", page), refresh)
+        if not html:
+            continue
+        gtags, inds, sfs = parse_group_page(html)
+        for t in gtags:
+            f = fields.get(t)
+            if not f:
+                continue
+            if not f["indicators"]:
+                f["indicators"] = [{**i, "values": apply_only(i["values"], t)} for i in inds]
+            if not f["subfields"]:
+                f["subfields"] = apply_only(sfs, t)
+            f.setdefault("see_also", urljoin(LOC + fmt + "/", page))
+
+    for tag, words in ALIASES.get(fmt, {}).items():
+        if tag in fields:
+            fields[tag]["aliases"] = words
+
+    order = lambda k: (k != "LDR", k)
+    return {k: fields[k] for k in sorted(fields, key=order)}
+
+
+def report(fmt: str, fields: dict) -> None:
+    """Print anything that looks incomplete so it can be checked by hand."""
+    control = {"LDR", "001", "003", "004", "005", "006", "007", "008"}
+    problems = []
+    for tag, f in fields.items():
+        if not f["definition"]:
+            problems.append(f"{tag}: no definition")
+        if tag in control:
+            if tag in ("LDR", "008") and not (f["positions"] or f.get("variants")):
+                problems.append(f"{tag}: no character positions")
+            continue
+        if not f["subfields"]:
+            problems.append(f"{tag}: no subfields")
+        if len(f["indicators"]) != 2:
+            problems.append(f"{tag}: {len(f['indicators'])} indicators")
+    n_sub = sum(len(f["subfields"]) for f in fields.values())
+    print(f"  {len(fields)} fields, {n_sub} subfields")
+    for p in problems:
+        print(f"  ? {p}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("formats", nargs="*", default=list(FORMATS), choices=list(FORMATS))
+    ap.add_argument("--refresh", action="store_true", help="ignore the page cache")
+    ap.add_argument("--workers", type=int, default=4, help="parallel downloads (default 4)")
+    args = ap.parse_args()
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for fmt in args.formats:
+        fields = scrape_format(fmt, args.refresh, args.workers)
+        report(fmt, fields)
+        out = {
+            "meta": {
+                "format": fmt,
+                "source": f"{LOC}{fmt}/",
+                "scraped": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            },
+            "fields": fields,
         }
-
-    # Write simple file
-    print(f"Writing {len(simple_data)} entries to {simple_file}")
-    with open(simple_file, "w", encoding="utf-8") as f:
-        json.dump(simple_data, f, indent=2, ensure_ascii=False)
-
-    print("\nDone!")
-    print(f"Total entries: {len(sorted_data)}")
-
-    # Count fields vs subfields
-    fields = sum(1 for k in sorted_data.keys() if len(k) == 3)
-    subfields = len(sorted_data) - fields
-    print(f"Fields: {fields}, Subfields: {subfields}")
+        path = DATA_DIR / f"{fmt}.json"
+        path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"  wrote {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)")
 
 
 if __name__ == "__main__":

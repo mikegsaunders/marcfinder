@@ -1,13 +1,23 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "marcfinder"
-version = "0.1.0"
-description = "Fast CLI tool for looking up MARC 21 bibliographic field definitions"
+version = "0.2.0"
+description = "Fast CLI tool for looking up MARC 21 Bibliographic and Holdings field definitions"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mike Saunders" }]
+keywords = ["marc", "marc21", "library", "cataloging", "metadata"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Processing :: Markup",
+]
 dependencies = [
     "colorama>=0.4.6",
 ]
@@ -16,7 +26,11 @@ dependencies = [
 dev = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
+    "pytest>=8.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mikegsaunders/marcfinder"
 
 [project.scripts]
 marc = "marc_cli.main:main"
@@ -24,3 +38,6 @@ marc = "marc_cli.main:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["marc_cli*"]
+
+[tool.setuptools.package-data]
+marc_cli = ["data/*.json"]
