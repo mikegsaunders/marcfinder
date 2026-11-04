@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "marcfinder"
-version = "0.2.0"
+version = "0.2.1"
 description = "Fast CLI tool for looking up MARC 21 Bibliographic and Holdings field definitions"
 readme = "README.md"
 requires-python = ">=3.10"

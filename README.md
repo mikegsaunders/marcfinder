@@ -104,7 +104,7 @@ it can be checked by hand.
 ### Releasing to PyPI
 
 1. Bump `version` in `pyproject.toml` and commit.
-2. Tag and push: `git tag v0.2.0 && git push --tags`.
+2. Tag and push: `git tag v0.2.1 && git push --tags`.
 3. Create a GitHub release from the tag. The `publish` workflow builds and uploads it.
 
 One-time setup: on PyPI, add a "trusted publisher" for this repo
