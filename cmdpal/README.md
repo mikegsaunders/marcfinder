@@ -44,3 +44,4 @@ again and re-run the `Add-AppxPackage` line.
 To remove it: `Get-AppxPackage mikegsaunders.marcfinder | Remove-AppxPackage`.
 
 Releasing (Store signing, WinGet and the Command Palette gallery) is covered in [RELEASING.md](RELEASING.md).
+Privacy policy: [PRIVACY.md](PRIVACY.md).
