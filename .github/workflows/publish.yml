@@ -6,6 +6,8 @@ on:
 
 jobs:
   pypi:
+    # cmdpal-v* releases are the Command Palette extension, not the Python package
+    if: ${{ !startsWith(github.event.release.tag_name, 'cmdpal-') }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- marcfinder icon: the MARC subfield delimiter, ‡a. Source for the PNGs in MarcFinderExtension/Assets
+       (regenerate with export-icons.ps1). The "a" is IBM Plex Mono Bold (OFL), converted to an outline. -->
+  <rect x="2" y="2" width="44" height="44" rx="10" fill="#1f3b63"/>
+  <rect x="13.5" y="9" width="4.6" height="30" rx="1.2" fill="#f5f1e6"/>
+  <rect x="7" y="15" width="17.6" height="4.2" rx="1.2" fill="#f5f1e6"/>
+  <rect x="7" y="28.4" width="17.6" height="4.2" rx="1.2" fill="#f5f1e6"/>
+  <path transform="translate(28.2 35) scale(0.021 -0.021)" fill="#f2b544" d="M487 0Q441 0 413.0 23.5Q385 47 380 91H375Q361 40 319.5 14.0Q278 -12 218 -12Q143 -12 97.5 28.5Q52 69 52 142Q52 223 111.0 262.0Q170 301 284 301H367V327Q367 373 345.5 396.5Q324 420 273 420Q226 420 197.0 402.0Q168 384 147 355L66 427Q92 471 147.5 499.5Q203 528 290 528Q396 528 455.5 479.5Q515 431 515 333V107H572V0ZM274 85Q313 85 340.0 104.0Q367 123 367 159V221H288Q197 221 197 160V140Q197 113 218.0 99.0Q239 85 274 85Z"/>
+</svg>

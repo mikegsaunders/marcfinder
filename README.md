@@ -85,6 +85,10 @@ Help is `marc --help` (`-h` is holdings).
 
 Colour is turned off automatically when output is piped, or when `NO_COLOR` is set.
 
+## PowerToys Command Palette
+
+There's also a Command Palette extension with the same lookups. See [cmdpal/README.md](cmdpal/README.md).
+
 ## Development
 
 Data lives in `marc_cli/data/bibliographic.json` and `marc_cli/data/holdings.json`,

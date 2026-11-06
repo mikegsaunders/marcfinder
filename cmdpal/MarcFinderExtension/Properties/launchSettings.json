@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "MarcFinderExtension (Package)": {
+      "commandName": "MsixPackage",
+      "doNotLaunchApp": true
+    }
+  }
+}

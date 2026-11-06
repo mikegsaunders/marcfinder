@@ -36,3 +36,9 @@ Thumbs.db
 
 # scraper page cache
 .cache/
+
+# Command Palette extension build output
+cmdpal/**/bin/
+cmdpal/**/obj/
+cmdpal/.vs/
+cmdpal/AppPackages/
