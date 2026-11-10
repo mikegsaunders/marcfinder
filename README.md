@@ -109,15 +109,6 @@ Downloaded pages are cached in `.cache/loc/`, so re-runs take seconds. The scrap
 prints anything that looks incomplete (for example a field with no subfields) so
 it can be checked by hand.
 
-### Releasing to PyPI
-
-1. Bump `version` in `pyproject.toml` and commit.
-2. Tag and push: `git tag v0.2.1 && git push --tags`.
-3. Create a GitHub release from the tag. The `publish` workflow builds and uploads it.
-
-One-time setup: on PyPI, add a "trusted publisher" for this repo
-(workflow `publish.yml`, environment `pypi`). No API token is needed.
-
 ## License
 
 MIT. Field definitions are from the Library of Congress MARC 21 documentation.
