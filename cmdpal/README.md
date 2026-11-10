@@ -4,6 +4,10 @@ A [Command Palette](https://learn.microsoft.com/windows/powertoys/command-palett
 extension that looks up MARC 21 fields with the same queries as the `marc` CLI. It embeds
 `marc_cli/data/*.json` at build time, so it doesn't need Python or marcfinder installed.
 
+Install it from the [Microsoft Store](https://apps.microsoft.com/detail/9NMT02CNPVDJ).
+
+![marcfinder showing field 245 in Command Palette](screenshot.png)
+
 ## Using it
 
 Open Command Palette (Win+Alt+Space) and pick **MARC lookup**, then type:
