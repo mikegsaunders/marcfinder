@@ -87,7 +87,11 @@ Colour is turned off automatically when output is piped, or when `NO_COLOR` is s
 
 ## PowerToys Command Palette
 
-There's also a Command Palette extension with the same lookups. See [cmdpal/README.md](cmdpal/README.md).
+There's also a Command Palette extension with the same lookups. Install it from the
+[Microsoft Store](https://apps.microsoft.com/detail/9NMT02CNPVDJ), or see
+[cmdpal/README.md](cmdpal/README.md) for details.
+
+![marcfinder showing field 245 in Command Palette](https://raw.githubusercontent.com/mikegsaunders/marcfinder/main/cmdpal/screenshot.png)
 
 ## Development
 
