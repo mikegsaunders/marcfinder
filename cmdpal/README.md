@@ -6,7 +6,7 @@ extension that looks up MARC 21 fields with the same queries as the `marc` CLI. 
 
 Install it from the [Microsoft Store](https://apps.microsoft.com/detail/9NMT02CNPVDJ).
 
-![marcfinder showing field 245 in Command Palette](screenshot.png)
+![marcfinder looking up 245, 008/23 and holdings 852 in Command Palette](demo.gif)
 
 ## Using it
 

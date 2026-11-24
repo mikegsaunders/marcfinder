@@ -106,7 +106,7 @@ The Command Palette extension runs the same lookups as the CLI (see
 [Installation](#powertoys) to set it up). Query syntax and tips are in
 [cmdpal/README.md](cmdpal/README.md).
 
-![marcfinder showing field 245 in Command Palette](https://raw.githubusercontent.com/mikegsaunders/marcfinder/main/cmdpal/screenshot.png)
+![marcfinder looking up 245, 008/23 and holdings 852 in Command Palette](https://raw.githubusercontent.com/mikegsaunders/marcfinder/main/cmdpal/demo.gif)
 
 ## Development
 
