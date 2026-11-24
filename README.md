@@ -1,8 +1,12 @@
 # marcfinder
 
-CLI tool for looking up MARC 21 **Bibliographic** and **Holdings** field definitions.
+CLI tool for looking up MARC 21 **Bibliographic** and **Holdings** field definitions. Also available as a [PowerToys Command Palette plugin](#powertoys-command-palette).
+
+![marc looking up field 245, Leader/06, ISBN, holdings field 852 and verbose 010 in a terminal](https://raw.githubusercontent.com/mikegsaunders/marcfinder/main/demo.gif)
 
 ## Installation
+
+### CLI
 
 ```bash
 uv tool install marcfinder
@@ -18,6 +22,17 @@ git clone https://github.com/mikegsaunders/marcfinder.git
 cd marcfinder
 uv tool install -e .
 ```
+
+### PowerToys
+
+Requires [PowerToys](https://learn.microsoft.com/windows/powertoys/install) with Command Palette enabled.
+
+1. Install **marcfinder** from the [Microsoft Store](https://apps.microsoft.com/detail/9NMT02CNPVDJ).
+2. Open Command Palette (Win+Alt+Space) and run **Reload** (or restart it).
+3. Pick **MARC lookup**, or type a tag like `245a` straight into the search box.
+
+The extension doesn't need Python or the CLI installed. To build it from source, see
+[cmdpal/README.md](cmdpal/README.md#building).
 
 ## Usage
 
@@ -87,9 +102,9 @@ Colour is turned off automatically when output is piped, or when `NO_COLOR` is s
 
 ## PowerToys Command Palette
 
-There's also a Command Palette extension with the same lookups. Install it from the
-[Microsoft Store](https://apps.microsoft.com/detail/9NMT02CNPVDJ), or see
-[cmdpal/README.md](cmdpal/README.md) for details.
+The Command Palette extension runs the same lookups as the CLI (see
+[Installation](#powertoys) to set it up). Query syntax and tips are in
+[cmdpal/README.md](cmdpal/README.md).
 
 ![marcfinder showing field 245 in Command Palette](https://raw.githubusercontent.com/mikegsaunders/marcfinder/main/cmdpal/screenshot.png)
 
@@ -108,6 +123,9 @@ uv run --extra dev pytest
 Downloaded pages are cached in `.cache/loc/`, so re-runs take seconds. The scraper
 prints anything that looks incomplete (for example a field with no subfields) so
 it can be checked by hand.
+
+The README demo GIF is recorded with [VHS](https://github.com/charmbracelet/vhs) from
+`demo.tape`. After changing the output, re-record it with `vhs demo.tape`.
 
 ## License
 
