@@ -124,9 +124,6 @@ Downloaded pages are cached in `.cache/loc/`, so re-runs take seconds. The scrap
 prints anything that looks incomplete (for example a field with no subfields) so
 it can be checked by hand.
 
-The README demo GIF is recorded with [VHS](https://github.com/charmbracelet/vhs) from
-`demo.tape`. After changing the output, re-record it with `vhs demo.tape`.
-
 ## License
 
 MIT. Field definitions are from the Library of Congress MARC 21 documentation.
